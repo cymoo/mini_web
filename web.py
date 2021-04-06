@@ -1,10 +1,14 @@
 """A minimum web framework"""
 
+import os
+import json
+import re
 import sys
 from typing import *
 import cgi
 from urllib.parse import unquote, parse_qs
 from http.cookies import SimpleCookie
+from io import BytesIO
 
 
 HTTP_STATUS_CODES = {
@@ -33,13 +37,34 @@ class cached_property:
         return value
 
 
+class FileStorage:
+    def __init__(
+            self,
+            stream: BytesIO,
+            name: str,
+            filename: str,
+            headers: Optional[dict] = None
+    ) -> None:
+        self.stream = stream or BytesIO()
+        self.name = name
+        self.raw_filename = filename
+        self.headers = headers or {}
+
+    def secure_filename(self) -> str:
+        pass
+
+    def save(self, dst: str, buffer_size: int = 4096) -> None:
+        pass
+
+
 class HttpError(Exception):
     code = 500
 
-    def __init__(self) -> None:
+    def __init__(self, description: str) -> None:
         super().__init__()
         self.headers = []
         self.status = '%d %s'.format(self.code, HTTP_STATUS_CODES[self.code])
+        self.description = description
 
     def set_header(self, name: str, value: str) -> None:
         self.headers.append((name, value))
@@ -65,11 +90,8 @@ class Request:
         self._environ = environ
 
     @property
-    def query_string(self, parse=True) -> Union[str, dict]:
-        value = self._environ.get('QUERY_STRING', '')
-        if parse:
-            value = parse_qs(value)
-        return value
+    def query_string(self) -> str:
+        return self._environ.get('QUERY_STRING', '')
 
     @property
     def method(self) -> str:
@@ -80,17 +102,12 @@ class Request:
         return unquote(self._environ.get('PATH_INFO', ''))
 
     @property
-    def content_type(self):
+    def content_type(self) -> str:
         return self._environ.get('CONTENT_TYPE', '')
 
     @property
     def content_length(self) -> int:
         return int(self._environ.get('CONTENT_LENGTH') or -1)
-
-    @cached_property
-    def cookies(self) -> dict:
-        http_cookie = self._environ.get('HTTP_COOKIE', '')
-        return dict((cookie.key, unquote(cookie.value)) for cookie in SimpleCookie(http_cookie).values())
 
     @property
     def host(self) -> str:
@@ -122,49 +139,58 @@ class Request:
     def get_header(self, name: str) -> str:
         return self.headers.get(name.upper(), '')
 
+    # noinspection PyPep8Naming
     @cached_property
-    def inputs(self):
-        def _convert(item):
-            return item
-        # if isinstance(item, list):
-            #     return [_to_unicode(i.value) for i in item]
-            # if item.filename:
-            #     return MultipartFile(item)
-            # return _to_unicode(item.value)
+    def GET(self) -> dict:
+        return parse_qs(self.query_string)
 
-        fs = cgi.FieldStorage(
+    # noinspection PyPep8Naming
+    @cached_property
+    def POST(self) -> dict:
+        fields = cgi.FieldStorage(
             fp=self._environ['wsgi.input'],
             environ=self._environ,
             keep_blank_values=True
         )
-        inputs = dict()
-        for key in fs:
-            inputs[key] = _convert(fs[key])
-        return inputs
+        fields = fields.list or []
+        post = dict()
 
-    def get_raw_data(self):
-        fp = self._environ['wsgi.input']
-        return fp.read()
+        for item in fields:
+            if item.filename:
+                post[item.name] = FileStorage(item.file, item.name, item.filename, item.headers)
+            else:
+                post[item.name] = item.value
+        return post
 
-    @property
-    def form(self):
-        pass
+    @cached_property
+    def json(self) -> Optional[dict]:
+        ctype = self.content_type.lower().split(';')[0]
+        if ctype != 'application/json':
+            return None
 
-    @property
-    def files(self):
-        pass
+        body = self._get_raw_body()
+        try:
+            return json.loads(body)
+        except (ValueError, TypeError):
+            raise BadRequest('Invalid JSON')
 
-    @property
-    def json(self):
-        pass
+    @cached_property
+    def cookies(self) -> dict:
+        http_cookie = self._environ.get('HTTP_COOKIE', '')
+        return dict((cookie.key, unquote(cookie.value)) for cookie in SimpleCookie(http_cookie).values())
 
-    def __iter__(self):
+    def _get_raw_body(self) -> bytes:
+        stream = self._environ['wsgi.input']
+        bytes_length = max(0, self.content_length)
+        return stream.read(bytes_length)
+
+    def __iter__(self) -> Iterable:
         return iter(self._environ)
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self._environ)
 
-    def __str__(self):
+    def __str__(self) -> str:
         return '<%s: %s %s>' % (self.__class__.__name__, self.method, self.path)
 
 
@@ -183,11 +209,11 @@ class BaseResponse:
 
     @property
     def headers(self):
-        pass
+        return None
 
     @property
     def status(self):
-        pass
+        return None
 
     @status.setter
     def status(self, value):
@@ -257,6 +283,9 @@ class MiniWeb:
         pass
 
     def delete(self, path):
+        pass
+
+    def error(self, code: int, callback=None):
         pass
 
     def wsgi(self, environ, start_response):
