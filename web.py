@@ -1,24 +1,19 @@
 """A minimum web framework"""
 
-import os
+import cgi
 import json
+import os
 import re
 import sys
-from typing import *
-import cgi
-from urllib.parse import unquote, parse_qs
+from datetime import datetime, date, tzinfo
+from http.client import responses
 from http.cookies import SimpleCookie
 from io import BytesIO
+from typing import *
+from urllib.parse import unquote, parse_qs
 
 
-HTTP_STATUS_CODES = {
-    200: 'OK',
-    301: 'Moved Permanently',
-    303: 'See Other',
-    400: 'Bad Request',
-    404: 'Not Found',
-    500: 'Internal Server Error',
-}
+HTTP_STATUS_LINES = {key: '%d %s' % (key, value) for key, value in responses.items()}
 
 
 # noinspection PyPep8Naming
@@ -37,6 +32,18 @@ class cached_property:
         return value
 
 
+def hkey(key: str) -> str:
+    if '\n' in key or '\r' in key or '\0' in key:
+        raise ValueError('Header name must not contain control characters: %s'.format(key))
+    return key.title().replace('_', '-')
+
+
+def hval(value: str) -> str:
+    if '\n' in value or '\r' in value or '\0' in value:
+        raise ValueError('Header value must not contain control characters: %s'.format(value))
+    return value
+
+
 class FileStorage:
     def __init__(
             self,
@@ -50,27 +57,45 @@ class FileStorage:
         self.raw_filename = filename
         self.headers = headers or {}
 
-    def secure_filename(self) -> str:
-        pass
+    @staticmethod
+    def secure_filename(filename: str) -> str:
+        filename = re.sub(r'[^\u4e00-\u9fa5\w\-.]+', '', filename).strip()
+        filename = re.sub(r'[-\s]+', '-', filename).strip('.-')
+        return filename[:255] or 'empty'
 
-    def save(self, dst: str, buffer_size: int = 4096) -> None:
-        pass
+    def save(self, dst: str, overwrite=False) -> None:
+        if not os.path.isdir(dst):
+            raise HttpError(500, 'Folder does not exists: %s'.format(dst))
+
+        filepath = os.path.join(dst, self.secure_filename(self.raw_filename))
+        if os.path.exists(filepath) and not overwrite:
+            raise HttpError(500, 'File exists: %s.'.format(filepath))
+
+        with open(filepath, 'wb') as fp:
+            stream = self.stream
+            while True:
+                buf = stream.read(4096)
+                if not buf:
+                    break
+                fp.write(buf)
 
 
 class HttpError(Exception):
     code = 500
 
-    def __init__(self, description: str) -> None:
+    def __init__(self, code: int, description: str) -> None:
         super().__init__()
         self.headers = []
-        self.status = '%d %s'.format(self.code, HTTP_STATUS_CODES[self.code])
+        self.code = code
+        # self.status = '%d %s'.format(self.code, HTTP_STATUS_CODES[self.code])
         self.description = description
 
     def set_header(self, name: str, value: str) -> None:
         self.headers.append((name, value))
 
     def __str__(self) -> str:
-        return self.status
+        # return self.status
+        return ''
 
 
 class BadRequest(HttpError):
@@ -172,7 +197,7 @@ class Request:
         try:
             return json.loads(body)
         except (ValueError, TypeError):
-            raise BadRequest('Invalid JSON')
+            raise HttpError(400, 'Invalid JSON')
 
     @cached_property
     def cookies(self) -> dict:
@@ -195,48 +220,94 @@ class Request:
 
 
 class BaseResponse:
-    def __init__(self, headers=None, status_code=200, content_type='text/html; charset=utf-8'):
-        pass
+    default_status_code = 200
+    default_content_type = 'text/html; charset=UTF-8'
 
-    def get_header(self, name):
-        pass
+    def __init__(
+            self,
+            body: Optional[Any] = None,
+            status_code: int = 200,
+    ) -> None:
+        self.body = body
+        self.status_code = status_code or self.default_status_code
+        self._cookies = SimpleCookie()
+        self._headers = {}
 
-    def set_header(self, name, value):
-        pass
+    def get_header(self, name: str) -> str:
+        return self._headers.get(hkey(name), [''])(-1)
 
-    def unset_header(self, name):
-        pass
+    def set_header(self, name: str, value: str) -> None:
+        self._headers[hkey(name)] = [hval(value)]
+
+    def add_header(self, name: str, value: str) -> None:
+        self._headers.setdefault(hkey(name), []).append(hval(value))
+
+    def unset_header(self, name: str) -> None:
+        del self._headers[hkey(name)]
 
     @property
-    def headers(self):
-        return None
+    def headers(self) -> List[Tuple[str, str]]:
+        """ WSGI conform list of (header, value) tuples. """
+        headers = list(self._headers.items())
+
+        if 'Content-Type' not in self._headers:
+            headers.append(('Content-Type', [self.default_content_type]))
+
+        headers = [(name, val) for (name, values) in headers for val in values]
+
+        if self._cookies:
+            for cookie in self._cookies.values():
+                headers.append(('Set-Cookie', hval(cookie.OutputString())))
+
+        # TODO: must convert to latin1?
+        # headers = [(key, value.encode('utf8').decode('latin1')) for (key, value) in headers]
+        return headers
 
     @property
-    def status(self):
-        return None
-
-    @status.setter
-    def status(self, value):
-        pass
+    def status_line(self) -> str:
+        return HTTP_STATUS_LINES.get(self.status_code, '%d Unknown' % self.status_code)
 
     def set_cookie(
             self,
-            name,
-            value,
-            max_age=None,
-            expires=None,
-            path='/',
-            domain=None,
-            secure=False,
-            http_only=True
-    ):
-        pass
+            name: str,
+            value: str,
+            path: str = '/',
+            secure: bool = False,
+            httponly: bool = False,
+            max_age: Optional[int] = None,
+            expires: Optional[Union[str, datetime, int, float]] = None,
+            domain: Optional[str] = None,
+            same_site: Optional[str] = None,
+    ) -> None:
+        self._cookies[name] = value
 
-    def unset_cookie(self, name):
-        pass
+        if path:
+            self._cookies[name]['path'] = path
+        if secure:
+            self._cookies[name]['secure'] = secure
+        if httponly:
+            self._cookies[name]['httponly'] = httponly
+        if domain:
+            self._cookies[name]['domain'] = domain
+        if max_age:
+            self._cookies[name]['max-age'] = max_age
+        if same_site:
+            self._cookies[name]['samesite'] = same_site.lower()
 
-    def __str__(self):
-        pass
+        if expires:
+            # TODO: deal with datetime in Python is too boring...
+            self._cookies[name][expires] = expires
+
+    def unset_cookie(self, name: str, **kw) -> None:
+        kw['max_age'] = -1
+        kw['expires'] = 0
+        self.set_cookie(name, '', **kw)
+
+    def __str__(self) -> str:
+        rv = ''
+        for name, value in self.headers:
+            rv += '%s: %s\n'.format(name.title(), value.strip())
+        return rv
 
 
 class HttpResponse(BaseResponse):
