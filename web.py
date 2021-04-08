@@ -2,15 +2,16 @@
 
 import cgi
 import json
+import mimetypes
 import os
 import re
 import sys
-from datetime import datetime, date, tzinfo
+from datetime import datetime
 from http.client import responses
 from http.cookies import SimpleCookie
 from io import BytesIO
 from typing import *
-from urllib.parse import unquote, parse_qs
+from urllib.parse import unquote, parse_qs, quote
 
 
 HTTP_STATUS_LINES = {key: '%d %s' % (key, value) for key, value in responses.items()}
@@ -32,16 +33,27 @@ class cached_property:
         return value
 
 
-def hkey(key: str) -> str:
-    if '\n' in key or '\r' in key or '\0' in key:
-        raise ValueError('Header name must not contain control characters: %s'.format(key))
+class FileWrapper:
+    """Wrapper to convert file-like objects to iterables"""
+    def __init__(self, stream: IO[bytes], buffer_size: int = 8192):
+        self.stream = stream
+        self.buffer_size = buffer_size
+        if hasattr(stream, 'close'):
+            self.close = stream.close
+
+    def __iter__(self) -> 'FileWrapper':
+        return self
+
+    def __next__(self) -> bytes:
+        data = self.stream.read(self.buffer_size)
+        if data:
+            return data
+        raise StopIteration
+
+
+def tr(key: str) -> str:
+    """Normalize HTTP Response header"""
     return key.title().replace('_', '-')
-
-
-def hval(value: str) -> str:
-    if '\n' in value or '\r' in value or '\0' in value:
-        raise ValueError('Header value must not contain control characters: %s'.format(value))
-    return value
 
 
 class FileStorage:
@@ -65,11 +77,11 @@ class FileStorage:
 
     def save(self, dst: str, overwrite=False) -> None:
         if not os.path.isdir(dst):
-            raise HttpError(500, 'Folder does not exists: %s'.format(dst))
+            raise HTTPError(500, 'Folder does not exists: %s'.format(dst))
 
         filepath = os.path.join(dst, self.secure_filename(self.raw_filename))
         if os.path.exists(filepath) and not overwrite:
-            raise HttpError(500, 'File exists: %s.'.format(filepath))
+            raise HTTPError(500, 'File exists: %s.'.format(filepath))
 
         with open(filepath, 'wb') as fp:
             stream = self.stream
@@ -78,36 +90,6 @@ class FileStorage:
                 if not buf:
                     break
                 fp.write(buf)
-
-
-class HttpError(Exception):
-    code = 500
-
-    def __init__(self, code: int, description: str) -> None:
-        super().__init__()
-        self.headers = []
-        self.code = code
-        # self.status = '%d %s'.format(self.code, HTTP_STATUS_CODES[self.code])
-        self.description = description
-
-    def set_header(self, name: str, value: str) -> None:
-        self.headers.append((name, value))
-
-    def __str__(self) -> str:
-        # return self.status
-        return ''
-
-
-class BadRequest(HttpError):
-    code = 400
-
-
-class NotFound(HttpError):
-    code = 404
-
-
-class InternalServerError(HttpError):
-    code = 500
 
 
 class Request:
@@ -197,13 +179,14 @@ class Request:
         try:
             return json.loads(body)
         except (ValueError, TypeError):
-            raise HttpError(400, 'Invalid JSON')
+            raise HTTPError(400, 'Invalid JSON')
 
     @cached_property
     def cookies(self) -> dict:
         http_cookie = self._environ.get('HTTP_COOKIE', '')
         return dict((cookie.key, unquote(cookie.value)) for cookie in SimpleCookie(http_cookie).values())
 
+    # NOTE: we omit parsing 'transfer-encoding: chunked'
     def _get_raw_body(self) -> bytes:
         stream = self._environ['wsgi.input']
         bytes_length = max(0, self.content_length)
@@ -223,27 +206,22 @@ class BaseResponse:
     default_status_code = 200
     default_content_type = 'text/html; charset=UTF-8'
 
-    def __init__(
-            self,
-            body: Optional[Any] = None,
-            status_code: int = 200,
-    ) -> None:
-        self.body = body
+    def __init__(self, status_code: int = 200) -> None:
         self.status_code = status_code or self.default_status_code
         self._cookies = SimpleCookie()
         self._headers = {}
 
     def get_header(self, name: str) -> str:
-        return self._headers.get(hkey(name), [''])(-1)
+        return self._headers.get(tr(name), [''])(-1)
 
     def set_header(self, name: str, value: str) -> None:
-        self._headers[hkey(name)] = [hval(value)]
+        self._headers[tr(name)] = [value]
 
     def add_header(self, name: str, value: str) -> None:
-        self._headers.setdefault(hkey(name), []).append(hval(value))
+        self._headers.setdefault(tr(name), []).append(value)
 
     def unset_header(self, name: str) -> None:
-        del self._headers[hkey(name)]
+        del self._headers[tr(name)]
 
     @property
     def headers(self) -> List[Tuple[str, str]]:
@@ -257,7 +235,7 @@ class BaseResponse:
 
         if self._cookies:
             for cookie in self._cookies.values():
-                headers.append(('Set-Cookie', hval(cookie.OutputString())))
+                headers.append(('Set-Cookie', cookie.OutputString()))
 
         # TODO: must convert to latin1?
         # headers = [(key, value.encode('utf8').decode('latin1')) for (key, value) in headers]
@@ -310,20 +288,81 @@ class BaseResponse:
         return rv
 
 
-class HttpResponse(BaseResponse):
-    pass
+class HTTPResponse(BaseResponse):
+    def __init__(self, data: Union[str, bytes]) -> None:
+        super().__init__()
+
+        if isinstance(data, str):
+            data = data.encode()
+
+        self.set_header('Content-Length', str(len(data)))
+        self.data = [data]
 
 
-class JsonResponse(BaseResponse):
-    pass
+class JSONResponse(HTTPResponse):
+    def __init__(self, data: Union[list, dict], **kw) -> None:
+        data = json.dumps(data, **kw).encode()
+        super().__init__(data)
+        self.set_header('Content-Type', 'application/json')
 
 
 class FileResponse(BaseResponse):
-    pass
+    def __init__(self, filename: str, root_path: str, downloadable: bool = False) -> None:
+        super().__init__()
+        self.root_path = root_path = os.path.abspath(root_path)
+        self.file_path = file_path = os.path.abspath(os.path.join(root_path, filename))
+        self.check_file()
+
+        mimetype, encoding = mimetypes.guess_type(filename)
+
+        if mimetype:
+            self.set_header('Content-Type', mimetype)
+        else:
+            self.set_header('Content-Type', 'application/octet-stream')
+
+        if encoding:
+            self.set_header('Content-Encoding', encoding)
+
+        if downloadable:
+            self.set_header('Content-Disposition', 'attachment; filename="%s"' % filename)
+
+        stats = os.stat(file_path)
+        self.set_header('Content-Length', str(stats.st_size))
+        # self.set_header('Last-Modified', '')
+
+        self.data = FileWrapper(open(file_path, 'rb'))
+
+    def check_file(self) -> None:
+        if not self.file_path.startswith(self.root_path):
+            raise HTTPError(403, 'Access denied.')
+        if not os.path.exists(self.file_path) or not os.path.isfile(self.file_path):
+            raise HTTPError(404, 'File does not exist.')
+        if not os.access(self.file_path, os.R_OK):
+            raise HTTPError(403, 'No permission to access the file.')
 
 
-class Redirect(BaseResponse):
-    pass
+class Redirect(HTTPResponse):
+    def __init__(self, redirect_to: str, status_code: int = 301):
+        assert status_code in (301, 303), 'status code must be in (301, 303)'
+
+        super().__init__('')
+        self.status_code = status_code
+        self.set_header('Location', quote(redirect_to, safe="/#%[]=:;$&()+,!?*@'~"))
+
+
+class HTTPError(HTTPResponse, Exception):
+    def __init__(
+            self,
+            status_code: int = 500,
+            description: Optional[str] = None,
+            exception: Optional[Exception] = None
+    ):
+        assert status_code in range(400, 600), 'status code must be 4XX or 5XX'
+        
+        super(HTTPError, self).__init__(description or HTTP_STATUS_LINES[status_code])
+        super(Exception, self).__init__(description)
+        self.status_code = status_code
+        self.exception = exception
 
 
 class Router:
@@ -344,25 +383,28 @@ class MiniWeb:
     def __init__(self):
         pass
 
-    def get(self, path):
+    def get(self, path: str):
         pass
 
-    def post(self, path):
+    def post(self, path: str):
         pass
 
-    def put(self, path):
+    def put(self, path: str):
         pass
 
-    def delete(self, path):
+    def delete(self, path: str):
+        pass
+
+    def serve_static(self):
         pass
 
     def error(self, code: int, callback=None):
         pass
 
-    def wsgi(self, environ, start_response):
+    def wsgi(self, environ: dict, start_response: Callable):
         pass
 
-    def __call__(self, environ, start_response):
+    def __call__(self, environ: dict, start_response: Callable):
         return self.wsgi(environ, start_response)
 
     def run(self, host='127.0.0.1', port=9000):
