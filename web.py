@@ -35,7 +35,8 @@ class cached_property:
 
 class FileWrapper:
     """Wrapper to convert file-like objects to iterables"""
-    def __init__(self, stream: IO[bytes], buffer_size: int = 8192):
+    # stream: IO[bytes], NameError: name 'IO' is not defined?
+    def __init__(self, stream, buffer_size: int = 8192):
         self.stream = stream
         self.buffer_size = buffer_size
         if hasattr(stream, 'close'):
@@ -86,7 +87,7 @@ class FileStorage:
         with open(filepath, 'wb') as fp:
             stream = self.stream
             while True:
-                buf = stream.read(4096)
+                buf = stream.read(8192)
                 if not buf:
                     break
                 fp.write(buf)
@@ -366,43 +367,76 @@ class HTTPError(HTTPResponse, Exception):
 
 
 class Router:
-    def __init__(self):
-        pass
+    def __init__(self) -> None:
+        self.rules = []
 
-    def add(self, path, method, callback):
-        pass
+    def add(self, rule: str, method: str, func: Callable) -> None:
+        self.rules.append([rule, method, func])
 
-    def match(self, path, method):
-        pass
+    def match(self, path: str, method: str) -> Callable:
+        for rule, mtd, func in self.rules:
+            if rule == path and mtd == method:
+                return func
+        raise HTTPError(404)
 
-    def __str__(self):
-        pass
+    def __str__(self) -> str:
+        return str(self.rules)
 
 
 class MiniWeb:
     def __init__(self):
-        pass
+        self.router = Router()
+        self.error_handlers = {}
 
-    def get(self, path: str):
-        pass
+    def add_rule(self, rule: str, method: str, func: Callable) -> None:
+        self.router.add(rule, method, func)
 
-    def post(self, path: str):
-        pass
+    def route(self, rule: str, method: str) -> Callable:
+        def wrapper(func):
+            self.add_rule(rule, method, func)
+            return func
+        return wrapper
 
-    def put(self, path: str):
-        pass
+    def get(self, rule: str) -> Callable:
+        return self.route(rule, 'GET')
 
-    def delete(self, path: str):
+    def post(self, rule: str) -> Callable:
+        return self.route(rule, 'POST')
+
+    def put(self, rule: str) -> Callable:
+        return self.route(rule, 'PUT')
+
+    def delete(self, rule: str) -> Callable:
+        return self.route(rule, 'DELETE')
+
+    def error(self, code: int, callback=None):
         pass
 
     def serve_static(self):
         pass
 
-    def error(self, code: int, callback=None):
-        pass
+    def wsgi(self, environ: dict, start_response: Callable) -> Iterable[bytes]:
+        request = Request(environ)
+        try:
+            func = self.router.match(request.path, request.method)
+            response = self._cast(func(request))
+        except HTTPError as err:
+            response = err
+        except Exception as err:
+            response = HTTPError(500)
 
-    def wsgi(self, environ: dict, start_response: Callable):
-        pass
+        start_response(response.status_line, response.headers)
+        return response.data
+
+    @staticmethod
+    def _cast(response: Any) -> BaseResponse:
+        if isinstance(response, BaseResponse):
+            return response
+        if isinstance(response, (str, bytes)):
+            return HTTPResponse(response)
+        if isinstance(response, (list, dict)):
+            return JSONResponse(response)
+        raise ValueError('Unrecognized response')
 
     def __call__(self, environ: dict, start_response: Callable):
         return self.wsgi(environ, start_response)
@@ -410,9 +444,29 @@ class MiniWeb:
     def run(self, host='127.0.0.1', port=9000):
         from wsgiref.simple_server import make_server
         sys.stderr.write('Server is running...Hit Ctrl-C to quit.\n')
-        sys.stderr.write('Listening on http://%s:%d/.\n'.format(host, port))
+        sys.stderr.write('Listening on http://%s:%d/.\n' % (host, port))
         server = make_server(host, port, self)
         server.serve_forever()
 
     def __str__(self):
-        pass
+        return '<MiniWeb>'
+
+
+if __name__ == '__main__':
+    app = MiniWeb()
+
+    @app.get('/')
+    def index(req: Request):
+        print(req.headers)
+        return 'hello world'
+
+    @app.get('/json')
+    def index(req: Request):
+        print(req.cookies)
+        return {'status': 'ok', 'message': 'hello world'}
+
+    @app.get('/file')
+    def file(req: Request):
+        return FileResponse('web.py', os.path.dirname(__file__))
+
+    app.run(port=5000)
