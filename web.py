@@ -423,7 +423,7 @@ class MiniWeb:
         except HTTPError as err:
             response = err
         except Exception as err:
-            response = HTTPError(500)
+            response = HTTPError(500, exception=err)
 
         start_response(response.status_line, response.headers)
         return response.data
@@ -443,8 +443,8 @@ class MiniWeb:
 
     def run(self, host='127.0.0.1', port=9000):
         from wsgiref.simple_server import make_server
-        sys.stderr.write('Server is running...Hit Ctrl-C to quit.\n')
-        sys.stderr.write('Listening on http://%s:%d/.\n' % (host, port))
+        sys.stderr.write('Server running on http://%s:%d/\n' % (host, port))
+        sys.stderr.write('Hit Ctrl-C to quit...\n')
         server = make_server(host, port, self)
         server.serve_forever()
 
