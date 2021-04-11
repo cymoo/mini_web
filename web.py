@@ -190,14 +190,17 @@ class Request:
         body = self._get_raw_body()
         try:
             return json.loads(body)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as err:
+            print(err)
             raise HTTPError(400, 'Invalid JSON')
 
     @cached_property
     def cookies(self) -> dict:
         http_cookie = self._environ.get('HTTP_COOKIE', '')
-        return dict((cookie.key, unquote(cookie.value))
-                    for cookie in SimpleCookie(http_cookie).values())
+        return {
+            cookie.key: unquote(cookie.value)
+            for cookie in SimpleCookie(http_cookie).values()
+        }
 
     # NOTE: we omit parsing 'transfer-encoding: chunked'
     def _get_raw_body(self) -> bytes:
@@ -323,7 +326,7 @@ class Response:
     def __str__(self) -> str:
         rv = ''
         for name, value in self.header_list:
-            rv += '%s: %s\n'.format(name.title(), value.strip())
+            rv += '%s: %s\n' % (name.title(), value.strip())
         return rv
 
 
