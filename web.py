@@ -13,7 +13,6 @@ from io import BytesIO
 from typing import *
 from urllib.parse import unquote, parse_qs, quote
 
-
 HTTP_STATUS_LINES = {key: '%d %s' % (key, value) for key, value in responses.items()}
 
 
@@ -35,6 +34,7 @@ class cached_property:
 
 class FileWrapper:
     """Wrapper to convert file-like objects to iterables"""
+
     # stream: IO[bytes], NameError: name 'IO' is not defined?
     def __init__(self, stream, buffer_size: int = 8192):
         self.stream = stream
@@ -55,6 +55,13 @@ class FileWrapper:
 def tr(key: str) -> str:
     """Normalize HTTP Response header"""
     return key.title().replace('_', '-')
+
+
+def squeeze(value: List[str]) -> Union[str, List[str]]:
+    if len(value) == 1:
+        return value[0]
+    else:
+        return value
 
 
 class FileStorage:
@@ -151,7 +158,7 @@ class Request:
     # noinspection PyPep8Naming
     @cached_property
     def GET(self) -> dict:
-        return parse_qs(self.query_string)
+        return {key: squeeze(value) for key, value in parse_qs(self.query_string).items()}
 
     # noinspection PyPep8Naming
     @cached_property
@@ -234,13 +241,10 @@ class Response:
                     self.add_header(key, value)
 
     def get_header(self, name: str) -> Optional[str]:
-        header = self._headers.get(tr(name))
-        if header is None:
+        rv = self._headers.get(tr(name))
+        if rv is None:
             return None
-        if len(header) == 1:
-            return header[0]
-        else:
-            return header
+        return squeeze(rv)
 
     def set_header(self, name: str, value: str) -> None:
         self._headers[tr(name)] = [value]
@@ -310,7 +314,7 @@ class Response:
 
     def __str__(self) -> str:
         rv = ''
-        for name, value in self.headers.items():
+        for name, value in self.header_list:
             rv += '%s: %s\n'.format(name.title(), value.strip())
         return rv
 
@@ -394,7 +398,7 @@ class HTTPError(Response, Exception):
             headers: Optional[dict] = None
     ):
         assert status_code in range(400, 600), 'status code must be 4XX or 5XX'
-        
+
         super(HTTPError, self).__init__(description or HTTP_STATUS_LINES[status_code], headers)
         super(Exception, self).__init__(description)
         self.status_code = status_code
@@ -444,10 +448,15 @@ class MiniWeb:
     def add_rule(self, rule: str, method: str, func: Callable) -> None:
         self.router.add(rule, method, func)
 
-    def route(self, rule: str, method: str) -> Callable:
+    def route(self, rule: str, method: Union[str, List[str]]) -> Callable:
         def wrapper(func):
-            self.add_rule(rule, method, func)
+            if isinstance(method, list):
+                for mtd in method:
+                    self.add_rule(rule, mtd, func)
+            else:
+                self.add_rule(rule, method, func)
             return func
+
         return wrapper
 
     def get(self, rule: str) -> Callable:
@@ -462,10 +471,11 @@ class MiniWeb:
     def delete(self, rule: str) -> Callable:
         return self.route(rule, 'DELETE')
 
-    def error(self, status_code: int):
+    def error(self, status_code: int) -> Callable:
         def wrapper(func):
             self.error_handlers[status_code] = func
             return func
+
         return wrapper
 
     def serve_static(
@@ -530,35 +540,47 @@ class MiniWeb:
 
 if __name__ == '__main__':
     from pprint import pprint
+
     app = MiniWeb()
 
     app.serve_static(os.path.dirname(__file__))
 
+
     @app.get('/')
     def index(req: Request):
-        return 'hello world'
+        resp = Response('hello world')
+        resp.set_cookie('foo', 'bar')
+        return resp
 
-    @app.post('/foo/<num:int>')
+
+    @app.get('/foo/<num:int>')
     def foo(req: Request, num: str):
+        print('cookie:')
+        print(req.cookies['foo'])
         return num
+
 
     @app.get('/files/<filepath:path>')
     def bar(req: Request, filepath: str):
         print(filepath)
         return FileResponse(filepath, os.path.dirname(__file__))
 
+
     @app.get('/json')
     def index(req: Request):
         print(req.cookies)
         return {'status': 'ok', 'message': 'hello world'}
 
+
     @app.get('/redirect')
     def redirect(req: Request):
         return Redirect('http://www.baidu.com')
 
+
     @app.get('/file')
     def file(req: Request):
         return FileResponse('example/app.py', os.path.dirname(__file__))
+
 
     @app.get('/upload')
     def upload(req: Request):
@@ -576,16 +598,50 @@ if __name__ == '__main__':
         </html>
         """
 
+
     @app.post('/upload')
     def upload(req: Request):
         print(req.POST)
         req.POST['file'].save(os.path.dirname(__file__))
         return {'status': 'ok', 'message': 'file uploaded'}
 
+
+    @app.route('/form', method=['GET', 'POST'])
+    def form(req: Request):
+        form_type = req.GET.get('type')
+        print(form_type)
+        if form_type == 'form-data':
+            enctype = 'multipart/form-data'
+        else:
+            enctype = 'application/x-www-form-urlencoded'
+
+        if req.method == 'GET':
+            return f"""
+                <html>
+                    <head><title>upload file</title></head>
+                    <body>
+                        <h1>upload file</h1>
+                        <form action="/form" method="post" enctype="{enctype}">
+                            <input type="text" name="username" />
+                            <input type="password" name="password" />
+                            <hr>
+                            <button type="submit">submit</button>
+                        </form>
+                    </body>
+                </html>
+            """
+        else:
+            return {
+                'name': req.POST['username'],
+                'password': req.POST['password']
+            }
+
+
     @app.error(404)
     def handle_404(req: Request, err: HTTPError):
         resp = JSONResponse({'status': 'failed', 'message': 'page not found'})
         resp.status_code = 404
         return resp
+
 
     app.run(port=5000)
