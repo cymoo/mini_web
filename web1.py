@@ -13,7 +13,10 @@ from io import BytesIO
 from typing import *
 from urllib.parse import unquote, parse_qs, quote
 
-HTTP_STATUS_LINES = {key: '%d %s' % (key, value) for key, value in responses.items()}
+HTTP_STATUS_LINES = {
+    key: '%d %s' % (key, value)
+    for key, value in responses.items()
+}
 
 
 # noinspection PyPep8Naming
@@ -65,13 +68,11 @@ def squeeze(value: List[str]) -> Union[str, List[str]]:
 
 
 class FileStorage:
-    def __init__(
-            self,
-            stream: BytesIO,
-            name: str,
-            filename: str,
-            headers: Optional[dict] = None
-    ) -> None:
+    def __init__(self,
+                 stream: BytesIO,
+                 name: str,
+                 filename: str,
+                 headers: Optional[dict] = None) -> None:
         self.stream = stream or BytesIO()
         self.name = name
         self.raw_filename = filename
@@ -158,22 +159,24 @@ class Request:
     # noinspection PyPep8Naming
     @cached_property
     def GET(self) -> dict:
-        return {key: squeeze(value) for key, value in parse_qs(self.query_string).items()}
+        return {
+            key: squeeze(value)
+            for key, value in parse_qs(self.query_string).items()
+        }
 
     # noinspection PyPep8Naming
     @cached_property
     def POST(self) -> dict:
-        fields = cgi.FieldStorage(
-            fp=self._environ['wsgi.input'],
-            environ=self._environ,
-            keep_blank_values=True
-        )
+        fields = cgi.FieldStorage(fp=self._environ['wsgi.input'],
+                                  environ=self._environ,
+                                  keep_blank_values=True)
         fields = fields.list or []
         post = dict()
 
         for item in fields:
             if item.filename:
-                post[item.name] = FileStorage(item.file, item.name, item.filename, item.headers)
+                post[item.name] = FileStorage(item.file, item.name,
+                                              item.filename, item.headers)
             else:
                 post[item.name] = item.value
         return post
@@ -193,7 +196,8 @@ class Request:
     @cached_property
     def cookies(self) -> dict:
         http_cookie = self._environ.get('HTTP_COOKIE', '')
-        return dict((cookie.key, unquote(cookie.value)) for cookie in SimpleCookie(http_cookie).values())
+        return dict((cookie.key, unquote(cookie.value))
+                    for cookie in SimpleCookie(http_cookie).values())
 
     # NOTE: we omit parsing 'transfer-encoding: chunked'
     def _get_raw_body(self) -> bytes:
@@ -212,14 +216,17 @@ class Request:
         return len(self._environ)
 
     def __str__(self) -> str:
-        return '<%s: %s %s>' % (self.__class__.__name__, self.method, self.path)
+        return '<%s: %s %s>' % (self.__class__.__name__, self.method,
+                                self.path)
 
 
 class Response:
     default_status_code = 200
     default_content_type = 'text/html; charset=UTF-8'
 
-    def __init__(self, data: Union[str, bytes], headers: Optional[dict] = None) -> None:
+    def __init__(self,
+                 data: Union[str, bytes],
+                 headers: Optional[dict] = None) -> None:
         self.status_code = self.default_status_code
         self._cookies = SimpleCookie()
         self._headers = {}
@@ -280,19 +287,20 @@ class Response:
 
     @property
     def status_line(self) -> str:
-        return HTTP_STATUS_LINES.get(self.status_code, '%d Unknown' % self.status_code)
+        return HTTP_STATUS_LINES.get(self.status_code,
+                                     '%d Unknown' % self.status_code)
 
     def set_cookie(
-            self,
-            name: str,
-            value: str,
-            path: str = '/',
-            secure: bool = False,
-            httponly: bool = False,
-            domain: Optional[str] = None,
-            max_age: Optional[int] = None,
-            # expires: Optional[Union[str, datetime, int, float]] = None,
-            # same_site: Optional[str] = None,
+        self,
+        name: str,
+        value: str,
+        path: str = '/',
+        secure: bool = False,
+        httponly: bool = False,
+        domain: Optional[str] = None,
+        max_age: Optional[int] = None,
+        # expires: Optional[Union[str, datetime, int, float]] = None,
+        # same_site: Optional[str] = None,
     ) -> None:
         self._cookies[name] = value
 
@@ -320,7 +328,10 @@ class Response:
 
 
 class JSONResponse(Response):
-    def __init__(self, data: Union[list, dict], headers: Optional[dict] = None, **kw) -> None:
+    def __init__(self,
+                 data: Union[list, dict],
+                 headers: Optional[dict] = None,
+                 **kw) -> None:
         data = json.dumps(data, **kw).encode()
         super().__init__(data, headers)
         self.set_header('Content-Type', 'application/json')
@@ -328,17 +339,17 @@ class JSONResponse(Response):
 
 class FileResponse(Response):
     def __init__(
-            self,
-            filename: str,
-            root_path: str,
-            headers: Optional[dict] = None,
-            request: Optional[Request] = None,
-            downloadable: bool = False,
-
+        self,
+        filename: str,
+        root_path: str,
+        headers: Optional[dict] = None,
+        request: Optional[Request] = None,
+        downloadable: bool = False,
     ) -> None:
         super().__init__('', headers)
         self.root_path = root_path = os.path.abspath(root_path)
-        self.file_path = file_path = os.path.abspath(os.path.join(root_path, filename))
+        self.file_path = file_path = os.path.abspath(
+            os.path.join(root_path, filename))
         self.check_file()
 
         stats = os.stat(file_path)
@@ -353,11 +364,13 @@ class FileResponse(Response):
             self.set_header('Content-Encoding', encoding)
 
         if downloadable:
-            self.set_header('Content-Disposition', 'attachment; filename="%s"' % filename)
+            self.set_header('Content-Disposition',
+                            'attachment; filename="%s"' % filename)
 
         if request:
             # checks etags
-            etag = '%d:%d:%d:%s' % (stats.st_dev, stats.st_ino, stats.st_mtime, filename)
+            etag = '%d:%d:%d:%s' % (stats.st_dev, stats.st_ino, stats.st_mtime,
+                                    filename)
             etag = hashlib.sha1(etag.encode()).hexdigest()
             self.set_header('ETag', etag)
 
@@ -374,32 +387,37 @@ class FileResponse(Response):
     def check_file(self) -> None:
         if not self.file_path.startswith(self.root_path):
             raise HTTPError(403, 'Access denied.')
-        if not os.path.exists(self.file_path) or not os.path.isfile(self.file_path):
+        if not os.path.exists(self.file_path) or not os.path.isfile(
+                self.file_path):
             raise HTTPError(404, 'File does not exist.')
         if not os.access(self.file_path, os.R_OK):
             raise HTTPError(403, 'No permission to access the file.')
 
 
 class Redirect(Response):
-    def __init__(self, redirect_to: str, status_code: int = 301, headers: Optional[dict] = None):
+    def __init__(self,
+                 redirect_to: str,
+                 status_code: int = 301,
+                 headers: Optional[dict] = None):
         assert status_code in (301, 303), 'status code must be in (301, 303)'
 
         super().__init__('', headers)
         self.status_code = status_code
-        self.set_header('Location', quote(redirect_to, safe="/#%[]=:;$&()+,!?*@'~"))
+        self.set_header('Location',
+                        quote(redirect_to, safe="/#%[]=:;$&()+,!?*@'~"))
 
 
 class HTTPError(Response, Exception):
-    def __init__(
-            self,
-            status_code: int = 500,
-            description: Optional[str] = None,
-            exception: Optional[Exception] = None,
-            headers: Optional[dict] = None
-    ):
+    def __init__(self,
+                 status_code: int = 500,
+                 description: Optional[str] = None,
+                 exception: Optional[Exception] = None,
+                 headers: Optional[dict] = None):
         assert status_code in range(400, 600), 'status code must be 4XX or 5XX'
 
-        super(HTTPError, self).__init__(description or HTTP_STATUS_LINES[status_code], headers)
+        super(HTTPError,
+              self).__init__(description or HTTP_STATUS_LINES[status_code],
+                             headers)
         super(Exception, self).__init__(description)
         self.status_code = status_code
         self.exception = exception
@@ -478,17 +496,14 @@ class MiniWeb:
 
         return wrapper
 
-    def serve_static(
-            self,
-            root_path: str,
-            url_prefix: str = '/static',
-            headers: Optional[dict] = None
-    ) -> None:
+    def serve_static(self,
+                     root_path: str,
+                     url_prefix: str = '/static',
+                     headers: Optional[dict] = None) -> None:
         self.add_rule(
             url_prefix + '/<filename:path>',
-            'GET',
-            lambda request, filename: FileResponse(filename, root_path, headers, request)
-        )
+            'GET', lambda request, filename: FileResponse(
+                filename, root_path, headers, request))
 
     def wsgi(self, environ: dict, start_response: Callable) -> Iterable[bytes]:
         request = Request(environ)
@@ -545,13 +560,11 @@ if __name__ == '__main__':
 
     app.serve_static(os.path.dirname(__file__))
 
-
     @app.get('/')
     def index(req: Request):
         resp = Response('hello world')
         resp.set_cookie('foo', 'bar')
         return resp
-
 
     @app.get('/foo/<num:int>')
     def foo(req: Request, num: str):
@@ -559,28 +572,23 @@ if __name__ == '__main__':
         print(req.cookies['foo'])
         return num
 
-
     @app.get('/files/<filepath:path>')
     def bar(req: Request, filepath: str):
         print(filepath)
         return FileResponse(filepath, os.path.dirname(__file__))
-
 
     @app.get('/json')
     def index(req: Request):
         print(req.cookies)
         return {'status': 'ok', 'message': 'hello world'}
 
-
     @app.get('/redirect')
     def redirect(req: Request):
         return Redirect('http://www.baidu.com')
 
-
     @app.get('/file')
     def file(req: Request):
         return FileResponse('example/app.py', os.path.dirname(__file__))
-
 
     @app.get('/upload')
     def upload(req: Request):
@@ -598,13 +606,11 @@ if __name__ == '__main__':
         </html>
         """
 
-
     @app.post('/upload')
     def upload(req: Request):
         print(req.POST)
         req.POST['file'].save(os.path.dirname(__file__))
         return {'status': 'ok', 'message': 'file uploaded'}
-
 
     @app.route('/form', method=['GET', 'POST'])
     def form(req: Request):
@@ -636,12 +642,10 @@ if __name__ == '__main__':
                 'password': req.POST['password']
             }
 
-
     @app.error(404)
     def handle_404(req: Request, err: HTTPError):
         resp = JSONResponse({'status': 'failed', 'message': 'page not found'})
         resp.status_code = 404
         return resp
-
 
     app.run(port=5000)
