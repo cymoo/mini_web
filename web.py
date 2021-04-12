@@ -3,6 +3,7 @@
 import cgi
 import hashlib
 import json
+import logging
 import mimetypes
 import os
 import re
@@ -11,16 +12,31 @@ from http.client import responses
 from http.cookies import SimpleCookie
 from io import BytesIO
 from typing import *
+from tempfile import TemporaryFile
 from urllib.parse import unquote, parse_qs, quote
 
-HTTP_STATUS_LINES = {
-    key: '%d %s' % (key, value)
-    for key, value in responses.items()
-}
+
+# Helper functions
+def tr(key: str) -> str:
+    """Normalize HTTP Response header name"""
+    return key.title().replace('_', '-')
+
+
+def squeeze(value: List[str]) -> Union[str, List[str]]:
+    if len(value) == 1:
+        return value[0]
+    else:
+        return value
 
 
 # noinspection PyPep8Naming
 class cached_property:
+    """
+    A decorator that converts a function into a lazy property.
+    The function wrapped is called the first time to retrieve the result
+    and then that calculated result is cached.
+    """
+
     def __init__(self, func):
         self.__name__ = func.__name__
         self.__module__ = func.__module__
@@ -55,19 +71,9 @@ class FileWrapper:
         raise StopIteration
 
 
-def tr(key: str) -> str:
-    """Normalize HTTP Response header"""
-    return key.title().replace('_', '-')
-
-
-def squeeze(value: List[str]) -> Union[str, List[str]]:
-    if len(value) == 1:
-        return value[0]
-    else:
-        return value
-
-
 class FileStorage:
+    """A thin wrapper over incoming files."""
+
     def __init__(self,
                  stream: BytesIO,
                  name: str,
@@ -85,24 +91,41 @@ class FileStorage:
         return filename[:255] or 'empty'
 
     def save(self, dst: str, overwrite=False) -> None:
-        if not os.path.isdir(dst):
-            raise HTTPError(500, 'Folder does not exists: %s'.format(dst))
+        if os.path.isdir(dst):
+            filepath = os.path.join(dst, self.secure_filename(self.raw_filename))
+        else:
+            filepath = dst
 
-        filepath = os.path.join(dst, self.secure_filename(self.raw_filename))
         if os.path.exists(filepath) and not overwrite:
-            raise HTTPError(500, 'File exists: %s.'.format(filepath))
+            raise IOError(500, 'File exists: %s.'.format(filepath))
+
+        offset = self.stream.tell()
 
         with open(filepath, 'wb') as fp:
             stream = self.stream
-            # TODO: what caused this error: read of closed file?
             while True:
-                buf = stream.read(8192)
+                buf = stream.read(4096)
                 if not buf:
                     break
                 fp.write(buf)
 
+        self.stream.seek(offset)
+
+
+HTTP_STATUS_LINES = {
+    key: '%d %s' % (key, value)
+    for key, value in responses.items()
+}
+
 
 class Request:
+    """
+    Represents an incoming WSGI HTTP request, with headers and body
+    taken from the WSGI environment.
+    """
+
+    MAX_BODY_SIZE = 1024 * 1024 * 4
+
     def __init__(self, environ: dict) -> None:
         self._environ = environ
 
@@ -167,9 +190,12 @@ class Request:
     # noinspection PyPep8Naming
     @cached_property
     def POST(self) -> dict:
-        fields = cgi.FieldStorage(fp=self._environ['wsgi.input'],
+        fields = cgi.FieldStorage(fp=self.body,
                                   environ=self._environ,
                                   keep_blank_values=True)
+        # NOTE: we hold an extra reference to avoid some bugs in `cgi.FieldStorage`
+        self.__dict__['_cgi.FieldStorage'] = fields
+
         fields = fields.list or []
         post = dict()
 
@@ -187,12 +213,10 @@ class Request:
         if ctype != 'application/json':
             return None
 
-        body = self._get_raw_body()
         try:
-            return json.loads(body)
+            return json.loads(self.body)
         except (ValueError, TypeError) as err:
-            print(err)
-            raise HTTPError(400, 'Invalid JSON')
+            raise HTTPError(400, 'Invalid JSON', exception=err)
 
     @cached_property
     def cookies(self) -> dict:
@@ -202,15 +226,36 @@ class Request:
             for cookie in SimpleCookie(http_cookie).values()
         }
 
-    # NOTE: we omit parsing 'transfer-encoding: chunked'
-    def _get_raw_body(self) -> bytes:
+    @property
+    def body(self) -> Union[BytesIO, TemporaryFile]:
+        self._get_body.seek(0)
+        return self._get_body
+
+    @cached_property
+    def _get_body(self) -> Union[BytesIO, TemporaryFile]:
+        # NOTE: For simplicity we do not parse chunked data
         chunked = 'chunked' in self.headers.get('TRANSFER-ENCODING', '')
         if chunked:
             raise NotImplementedError('Chunked data are not supported')
 
         stream = self._environ['wsgi.input']
-        bytes_length = max(0, self.content_length)
-        return stream.read(bytes_length)
+
+        if self.content_length > self.MAX_BODY_SIZE:
+            fp = TemporaryFile()
+        else:
+            fp = BytesIO()
+
+        max_read = max(0, self.content_length)
+        while True:
+            bs = stream.read(min(max_read, 8192))
+            if not bs:
+                break
+            fp.write(bs)
+            max_read -= len(bs)
+
+        fp.seek(0)
+        self._environ['wsgi.input'] = fp
+        return fp
 
     def __iter__(self) -> Iterable:
         return iter(self._environ)
@@ -224,6 +269,8 @@ class Request:
 
 
 class Response:
+    """Represents an outgoing WSGI HTTP response with body, status, and headers."""
+
     default_status_code = 200
     default_content_type = 'text/html; charset=UTF-8'
 
@@ -331,6 +378,8 @@ class Response:
 
 
 class JSONResponse(Response):
+    """An HTTP response that serializes data to JSON."""
+
     def __init__(self,
                  data: Union[list, dict],
                  headers: Optional[dict] = None,
@@ -341,6 +390,8 @@ class JSONResponse(Response):
 
 
 class FileResponse(Response):
+    """A streaming HTTP response optimized for files."""
+
     def __init__(
         self,
         filename: str,
@@ -398,6 +449,8 @@ class FileResponse(Response):
 
 
 class Redirect(Response):
+    """Represents an HTTP response with 301 or 303."""
+
     def __init__(self,
                  redirect_to: str,
                  status_code: int = 301,
@@ -411,6 +464,8 @@ class Redirect(Response):
 
 
 class HTTPError(Response, Exception):
+    """Represents an HTTP response with 4xx or 5xx. It can also be raised."""
+
     def __init__(self,
                  status_code: int = 500,
                  description: Optional[str] = None,
@@ -425,8 +480,13 @@ class HTTPError(Response, Exception):
         self.status_code = status_code
         self.exception = exception
 
+    def __str__(self):
+        return "<%s '%s'>" % (type(self).__name__, self.status_line)
+
 
 class Router:
+    """A Router is used to match a request to a function."""
+
     patterns = [
         (r'<\w+>', r'([\\w-]+)'),
         (r'<\w+:\s*int>', r'(\\d+)'),
@@ -462,9 +522,15 @@ class Router:
 
 
 class MiniWeb:
-    def __init__(self):
+    """
+    Represents a web application and consists of routes, decorators and configuration.
+    Instances are callable WSGI applications.
+    """
+
+    def __init__(self, config: Optional[dict] = None):
         self.router = Router()
         self.error_handlers = {}
+        self.config = config or {}
 
     def add_rule(self, rule: str, method: str, func: Callable) -> None:
         self.router.add(rule, method, func)
@@ -514,10 +580,10 @@ class MiniWeb:
             func, args = self.router.match(request.path, request.method)
             response = self._cast(func(request, *args))
         except HTTPError as err:
-            print(err)
+            logging.exception(err)
             response = err
         except Exception as err:
-            print(err)
+            logging.exception(err)
             response = HTTPError(500, exception=err)
 
         if isinstance(response, HTTPError):
@@ -554,101 +620,3 @@ class MiniWeb:
             result = handler(req, error)
             if result:
                 return self._cast(result)
-
-
-if __name__ == '__main__':
-    from pprint import pprint
-
-    app = MiniWeb()
-
-    app.serve_static(os.path.dirname(__file__))
-
-    @app.get('/')
-    def index(req: Request):
-        resp = Response('hello world')
-        resp.set_cookie('foo', 'bar')
-        return resp
-
-    @app.get('/foo/<num:int>')
-    def foo(req: Request, num: str):
-        print('cookie:')
-        print(req.cookies['foo'])
-        return num
-
-    @app.get('/files/<filepath:path>')
-    def bar(req: Request, filepath: str):
-        print(filepath)
-        return FileResponse(filepath, os.path.dirname(__file__))
-
-    @app.get('/json')
-    def index(req: Request):
-        print(req.cookies)
-        return {'status': 'ok', 'message': 'hello world'}
-
-    @app.get('/redirect')
-    def redirect(req: Request):
-        return Redirect('http://www.baidu.com')
-
-    @app.get('/file')
-    def file(req: Request):
-        return FileResponse('example/app.py', os.path.dirname(__file__))
-
-    @app.get('/upload')
-    def upload(req: Request):
-        return """
-        <html>
-            <head><title>upload file</title></head>
-            <body>
-                <h1>upload file</h1>
-                <form action="/upload" method="post" enctype="multipart/form-data">
-                    <input type="file" name="file" />
-                    <hr>
-                    <button type="submit">submit</button>
-                </form>
-            </body>
-        </html>
-        """
-
-    @app.post('/upload')
-    def upload(req: Request):
-        print(req.POST)
-        req.POST['file'].save(os.path.dirname(__file__))
-        return {'status': 'ok', 'message': 'file uploaded'}
-
-    @app.route('/form', method=['GET', 'POST'])
-    def form(req: Request):
-        form_type = req.GET.get('type')
-        print(form_type)
-        if form_type == 'form-data':
-            enctype = 'multipart/form-data'
-        else:
-            enctype = 'application/x-www-form-urlencoded'
-
-        if req.method == 'GET':
-            return f"""
-                <html>
-                    <head><title>upload file</title></head>
-                    <body>
-                        <h1>upload file</h1>
-                        <form action="/form" method="post" enctype="{enctype}">
-                            <input type="text" name="username" />
-                            <input type="password" name="password" />
-                            <hr>
-                            <button type="submit">submit</button>
-                        </form>
-                    </body>
-                </html>
-            """
-        else:
-            return {
-                'name': req.POST['username'],
-                'password': req.POST['password']
-            }
-
-    @app.error(404)
-    def handle_404(req: Request, err: HTTPError):
-        resp = JSONResponse({'status': 'failed', 'message': 'page not found'})
-        resp.status_code = 404
-        return resp
-
-    app.run(port=5000)
