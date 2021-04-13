@@ -1,5 +1,6 @@
 from web import MiniWeb, Request, Response, FileResponse, JSONResponse, Redirect, HTTPError
 import os
+from pprint import pprint
 
 app = MiniWeb()
 
@@ -8,6 +9,7 @@ app.serve_static(os.path.dirname(__file__))
 
 @app.get('/')
 def index(req: Request):
+    pprint(req._environ)
     resp = Response('hello world')
     resp.set_cookie('foo', 'bar')
     return resp
@@ -105,4 +107,11 @@ def handle_404(req: Request, err: HTTPError):
     return resp
 
 
-app.run(port=5000)
+# app.run(port=5000)
+
+if __name__ == '__main__':
+    from server import MiniServer
+
+    ms = MiniServer(('127.0.0.1', 7777))
+    ms.set_app(app.wsgi)
+    ms.run_forever()

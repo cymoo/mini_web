@@ -97,7 +97,7 @@ class FileStorage:
             filepath = dst
 
         if os.path.exists(filepath) and not overwrite:
-            raise IOError(500, 'File exists: %s.'.format(filepath))
+            raise IOError(500, 'File exists: {}.'.format(filepath))
 
         offset = self.stream.tell()
 
