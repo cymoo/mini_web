@@ -113,7 +113,7 @@ class FileStorage:
 
 
 HTTP_STATUS_LINES = {
-    key: '%d %s' % (key, value)
+    key: f'{key} {value}'
     for key, value in responses.items()
 }
 
@@ -264,8 +264,7 @@ class Request:
         return len(self._environ)
 
     def __str__(self) -> str:
-        return '<%s: %s %s>' % (self.__class__.__name__, self.method,
-                                self.path)
+        return '<{}: {} {}>'.format(self.__class__.__name__, self.method, self.path)
 
 
 class Response:
@@ -337,8 +336,7 @@ class Response:
 
     @property
     def status_line(self) -> str:
-        return HTTP_STATUS_LINES.get(self.status_code,
-                                     '%d Unknown' % self.status_code)
+        return HTTP_STATUS_LINES.get(self.status_code, f'{self.status_code} Unknown')
 
     def set_cookie(
         self,
@@ -373,7 +371,7 @@ class Response:
     def __str__(self) -> str:
         rv = ''
         for name, value in self.header_list:
-            rv += '%s: %s\n' % (name.title(), value.strip())
+            rv += '{}: {}\n'.format(name.title(), value.strip())
         return rv
 
 
@@ -423,8 +421,7 @@ class FileResponse(Response):
 
         if request:
             # checks etags
-            etag = '%d:%d:%d:%s' % (stats.st_dev, stats.st_ino, stats.st_mtime,
-                                    filename)
+            etag = '{}:{}:{}:{}'.format(stats.st_dev, stats.st_ino, stats.st_mtime, filename)
             etag = hashlib.sha1(etag.encode()).hexdigest()
             self.set_header('ETag', etag)
 
@@ -481,7 +478,7 @@ class HTTPError(Response, Exception):
         self.exception = exception
 
     def __str__(self):
-        return "<%s '%s'>" % (type(self).__name__, self.status_line)
+        return "<{} '{}'>".format(type(self).__name__, self.status_line)
 
 
 class Router:
@@ -597,7 +594,7 @@ class MiniWeb:
     def run(self, host='127.0.0.1', port=9000):
         from wsgiref.simple_server import make_server
 
-        sys.stderr.write('Server running on http://%s:%d/\n' % (host, port))
+        sys.stderr.write('Server running on http://{}:{}/\n'.format(host, port))
         server = make_server(host, port, self)
         server.serve_forever()
 

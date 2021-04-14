@@ -9,7 +9,6 @@ app.serve_static(os.path.dirname(__file__))
 
 @app.get('/')
 def index(req: Request):
-    pprint(req._environ)
     resp = Response('hello world')
     resp.set_cookie('foo', 'bar')
     return resp
@@ -31,17 +30,17 @@ def bar(req: Request, filepath: str):
 @app.get('/json')
 def index(req: Request):
     print(req.cookies)
-    return {'status': 'ok', 'message': '你好啊'}
+    return {'status': 'ok', 'message': 'nice to see you'}
 
 
 @app.get('/redirect')
 def redirect(req: Request):
-    return Redirect('http://www.baidu.com')
+    return Redirect('https://www.bing.com')
 
 
 @app.get('/file')
 def file(req: Request):
-    return FileResponse('example/app.py', os.path.dirname(__file__))
+    return FileResponse('examples.py', os.path.dirname(__file__))
 
 
 @app.route('/upload', method=['GET', 'POST'])
@@ -61,12 +60,7 @@ def upload(req: Request):
         </html>
         """
     else:
-        # print(req.POST)
-        # print(req.POST['file'])
         req.POST['file'].save(os.path.dirname(__file__))
-        req.POST['file'].save(os.path.dirname(__file__) + '/foo.txt')
-        # print('why....')
-        # print(req.POST['file'].stream.read())
         return {'status': 'ok', 'message': 'file uploaded'}
 
 
@@ -107,11 +101,5 @@ def handle_404(req: Request, err: HTTPError):
     return resp
 
 
-# app.run(port=5000)
-
 if __name__ == '__main__':
-    from server import MiniServer
-
-    ms = MiniServer(('127.0.0.1', 7777))
-    ms.set_app(app.wsgi)
-    ms.run_forever()
+    app.run()
