@@ -1,48 +1,73 @@
-from web import MiniWeb, Request, Response, FileResponse, JSONResponse, Redirect, HTTPError
 import os
-from pprint import pprint
+from random import random
+from web import (
+    MiniWeb,
+    Request,
+    Response,
+    FileResponse,
+    JSONResponse,
+    Redirect,
+    HTTPError
+)
 
 app = MiniWeb()
 
 app.serve_static(os.path.dirname(__file__))
 
 
+# hello world
 @app.get('/')
 def index(req: Request):
+    return 'hello world'
+
+
+# variable url
+@app.get('/user/<name>')
+def index(req: Request, name: str):
+    # a list or dict will be cast to a `JSONResponse`.
+    return {'status': 'ok', 'message': f'Hello, {name}; your ip: {req.remote_addr}'}
+
+
+# set header
+@app.get('/set-header')
+def set_header(req: Request):
     resp = Response('hello world')
+    resp.set_header('X-Powered-By', 'MiniWeb')
     resp.set_cookie('foo', 'bar')
+    # cookie can be then fetched using `req.cookies['foo']`
     return resp
 
 
-@app.get('/foo/<num:int>')
-def foo(req: Request, num: str):
-    print('cookie:')
-    print(req.cookies['foo'])
-    return num
-
-
-@app.get('/files/<filepath:path>')
-def bar(req: Request, filepath: str):
-    print(filepath)
-    return FileResponse(filepath, os.path.dirname(__file__))
-
-
-@app.get('/json')
-def index(req: Request):
-    print(req.cookies)
-    return {'status': 'ok', 'message': 'nice to see you'}
-
-
+# redirect
 @app.get('/redirect')
 def redirect(req: Request):
     return Redirect('https://www.bing.com')
 
 
+# send file
 @app.get('/file')
-def file(req: Request):
+def send_file(req: Request):
     return FileResponse('examples.py', os.path.dirname(__file__))
 
 
+# raise error
+@app.get('/error')
+def raise_error(req: Request):
+    if random() > 0.5:
+        raise HTTPError(500, 'Oops, you are unlucky')
+    else:
+        return 'a lucky boy'
+
+
+# handle error
+@app.error(404)
+def handle_404(req: Request, err: HTTPError):
+    resp = JSONResponse({'status': 'failed', 'message': 'page not found'})
+    resp.status_code = 404
+    return resp
+
+
+# upload file and save it
 @app.route('/upload', method=['GET', 'POST'])
 def upload(req: Request):
     if req.method == 'GET':
@@ -64,6 +89,7 @@ def upload(req: Request):
         return {'status': 'ok', 'message': 'file uploaded'}
 
 
+# get form args
 @app.route('/form', method=['GET', 'POST'])
 def form(req: Request):
     form_type = req.GET.get('type')
@@ -92,13 +118,6 @@ def form(req: Request):
             'name': req.POST['username'],
             'password': req.POST['password']
         }
-
-
-@app.error(404)
-def handle_404(req: Request, err: HTTPError):
-    resp = JSONResponse({'status': 'failed', 'message': 'page not found'})
-    resp.status_code = 404
-    return resp
 
 
 if __name__ == '__main__':
