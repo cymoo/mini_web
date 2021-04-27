@@ -89,7 +89,7 @@ def handle_404(req: Request, err: HTTPError):
 
 
 # upload file and save it
-@app.route('/upload', method=['GET', 'POST'])
+@app.route('/upload', methods=['GET', 'POST'])
 def upload(req: Request):
     if req.method == 'GET':
         return """
@@ -111,7 +111,7 @@ def upload(req: Request):
 
 
 # get form args
-@app.route('/form', method=['GET', 'POST'])
+@app.route('/form', methods=['GET', 'POST'])
 def form(req: Request):
     form_type = req.GET.get('type')
     if form_type == 'form-data':

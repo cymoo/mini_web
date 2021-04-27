@@ -38,10 +38,7 @@ class cached_property:
     """
 
     def __init__(self, func):
-        self.__name__ = func.__name__
-        self.__module__ = func.__module__
         self.__doc__ = func.__doc__
-
         self.func = func
 
     def __get__(self, obj, cls):
@@ -532,13 +529,13 @@ class MiniWeb:
     def add_rule(self, rule: str, method: str, func: Callable) -> None:
         self.router.add(rule, method, func)
 
-    def route(self, rule: str, method: Union[str, List[str]]) -> Callable:
+    def route(self, rule: str, methods: Union[str, List[str]]) -> Callable:
         def wrapper(func):
-            if isinstance(method, list):
-                for mtd in method:
+            if isinstance(methods, list):
+                for mtd in methods:
                     self.add_rule(rule, mtd, func)
             else:
-                self.add_rule(rule, method, func)
+                self.add_rule(rule, methods, func)
             return func
 
         return wrapper

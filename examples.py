@@ -24,6 +24,7 @@ def index(req: Request):
 # variable url
 @app.get('/user/<name>')
 def index(req: Request, name: str):
+    print(req.GET.get('page'))
     # a list or dict will be cast to a `JSONResponse`.
     return {'status': 'ok', 'message': f'Hello, {name}; your ip: {req.remote_addr}'}
 
@@ -68,7 +69,7 @@ def handle_404(req: Request, err: HTTPError):
 
 
 # upload file and save it
-@app.route('/upload', method=['GET', 'POST'])
+@app.route('/upload', methods=['GET', 'POST'])
 def upload(req: Request):
     if req.method == 'GET':
         return """
@@ -90,7 +91,7 @@ def upload(req: Request):
 
 
 # get form args
-@app.route('/form', method=['GET', 'POST'])
+@app.route('/form', methods=['GET', 'POST'])
 def form(req: Request):
     form_type = req.GET.get('type')
     if form_type == 'form-data':
