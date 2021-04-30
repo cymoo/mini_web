@@ -225,11 +225,11 @@ class Request:
 
     @property
     def body(self) -> Union[BytesIO, TemporaryFile]:
-        self._get_body.seek(0)
-        return self._get_body
+        self._body.seek(0)
+        return self._body
 
     @cached_property
-    def _get_body(self) -> Union[BytesIO, TemporaryFile]:
+    def _body(self) -> Union[BytesIO, TemporaryFile]:
         # NOTE: For simplicity we do not parse chunked data
         chunked = 'chunked' in self.headers.get('TRANSFER-ENCODING', '')
         if chunked:
@@ -262,6 +262,8 @@ class Request:
 
     def __str__(self) -> str:
         return '<{}: {} {}>'.format(self.__class__.__name__, self.method, self.path)
+
+    __repr__ = __str__
 
 
 class Response:
