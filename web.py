@@ -500,6 +500,8 @@ class HTTPError(Response, Exception):
     def __str__(self):
         return "<{} '{}'>".format(type(self).__name__, self.status_line)
 
+    __repr__ = __str__
+
 
 class Router:
     """A Router is used to match a request to a function."""
@@ -536,6 +538,8 @@ class Router:
 
     def __str__(self) -> str:
         return str(self.rules)
+
+    __repr__ = __str__
 
 
 class MiniWeb:
@@ -629,7 +633,7 @@ class MiniWeb:
             return Response(response)
         if isinstance(response, (list, dict)):
             return JSONResponse(response)
-        raise ValueError('Unrecognized response')
+        raise ValueError('Invalid response')
 
     def _handle_error(self, req: Request, error: HTTPError) -> Optional[Any]:
         handler = self.error_handlers.get(error.status_code)
