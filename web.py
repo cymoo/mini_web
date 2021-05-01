@@ -18,7 +18,10 @@ from urllib.parse import unquote, parse_qs, quote
 
 # Helper functions
 def tr(key: str) -> str:
-    """Normalize HTTP Response header name"""
+    """Normalize HTTP Response header name
+    >>> tr('content_type')
+    'Content-Type'
+    """
     return key.title().replace('_', '-')
 
 
@@ -279,7 +282,7 @@ class Response:
     default_content_type = 'text/html; charset=UTF-8'
 
     def __init__(self,
-                 data: Union[str, bytes],
+                 data: Union[str, bytes, FileWrapper],
                  headers: Optional[dict] = None) -> None:
         self.status_code = self.default_status_code
         self._cookies = SimpleCookie()
@@ -298,8 +301,8 @@ class Response:
                 if isinstance(value, (list, tuple)):
                     for item in value:
                         self.add_header(key, item)
-                elif isinstance(value, str):
-                    self.add_header(key, value)
+                else:
+                    self.add_header(key, str(value))
 
     def get_header(self, name: str) -> Optional[str]:
         rv = self._headers.get(tr(name))
@@ -325,7 +328,11 @@ class Response:
 
     @property
     def header_list(self) -> List[Tuple[str, str]]:
-        """ WSGI conform list of (header, value) tuples. """
+        """ WSGI conform list of (header, value) tuples.
+        >>> res = Response(data='', headers={'a': [1, 2], 'b': 3})
+        >>> res.header_list
+        [('a', 1), ('a', 2), ('b', 3)]
+        """
         headers = list(self._headers.items())
 
         if 'Content-Type' not in self._headers:
@@ -341,6 +348,14 @@ class Response:
 
     @property
     def status_line(self) -> str:
+        """
+        >>> Response('').status_line
+        '200 OK'
+        >>> res = Response('')
+        >>> res.status_code = 404
+        >>> res.status_line
+        '404 Not Found'
+        """
         return HTTP_STATUS_LINES.get(self.status_code, f'{self.status_code} Unknown')
 
     def set_cookie(
@@ -622,3 +637,8 @@ class MiniWeb:
             result = handler(req, error)
             if result:
                 return self._cast(result)
+
+
+if __name__ == '__main__':
+    import doctest
+    doctest.testmod()
