@@ -22,8 +22,14 @@ def tr(key: str) -> str:
     return key.title().replace('_', '-')
 
 
-def squeeze(value: List[str]) -> Union[str, List[str]]:
-    if len(value) == 1:
+def squeeze(value):
+    """
+    >>> squeeze([1, 2])
+    [1, 2]
+    >>> squeeze([1])
+    1
+    """
+    if isinstance(value, list) and len(value) == 1:
         return value[0]
     else:
         return value
@@ -101,7 +107,7 @@ class FileStorage:
         with open(filepath, 'wb') as fp:
             stream = self.stream
             while True:
-                buf = stream.read(4096)
+                buf = stream.read(8192)
                 if not buf:
                     break
                 fp.write(buf)
