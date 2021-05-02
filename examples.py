@@ -23,7 +23,7 @@ def index(req: Request):
 
 # variable url
 @app.get('/user/<name>')
-def index(req: Request, name: str):
+def user(req: Request, name: str):
     print(req.GET.get('page'))
     # a list or dict will be cast to a `JSONResponse`.
     return {
