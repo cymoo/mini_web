@@ -26,7 +26,10 @@ def index(req: Request):
 def index(req: Request, name: str):
     print(req.GET.get('page'))
     # a list or dict will be cast to a `JSONResponse`.
-    return {'status': 'ok', 'message': f'Hello, {name}; your ip: {req.remote_addr}'}
+    return {
+        'status': 'ok',
+        'message': f'Hello, {name}; your ip: {req.remote_addr}'
+    }
 
 
 # set header
@@ -63,7 +66,10 @@ def raise_error(req: Request):
 # handle error
 @app.error(404)
 def handle_404(req: Request, err: HTTPError):
-    resp = JSONResponse({'status': 'failed', 'message': 'page not found'})
+    resp = JSONResponse({
+        'status': 'failed',
+        'message': 'page not found'
+    })
     resp.status_code = 404
     return resp
 
