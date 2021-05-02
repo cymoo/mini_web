@@ -134,6 +134,7 @@ class Request:
 
     def __init__(self, environ: dict) -> None:
         self._environ = environ
+        self.app = None
 
     @property
     def query_string(self) -> str:
@@ -597,6 +598,7 @@ class MiniWeb:
 
     def wsgi(self, environ: dict, start_response: Callable) -> Iterable[bytes]:
         request = Request(environ)
+        request.app = self
         try:
             func, args = self.router.match(request.path, request.method)
             response = self._cast(func(request, *args))
